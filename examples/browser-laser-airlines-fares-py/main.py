@@ -87,15 +87,16 @@ async def select_departure_date(page, departure_date: str) -> None:
     today = date.today()
     month_delta = (requested.year - today.year) * 12 + requested.month - today.month
     title = requested.strftime("%d/%m/%Y")
+    await page.locator('input[name="date"]').click(force=True)
 
     # The cloud browser may be a calendar day ahead in UTC, so inspect the open
     # calendar instead of assuming it opened on the local process's month.
     for _ in range(month_delta + 2):
         cell = page.locator(f'td[title="{title}"]:not(.disabled)').first
         if await cell.count() and await cell.is_visible():
-            await cell.click()
+            await cell.click(force=True)
             return
-        await page.locator(".mx-btn-icon-right").click()
+        await page.locator(".mx-btn-icon-right").first.click(force=True)
         await page.wait_for_timeout(100)
     raise InputError(
         f"Departure date {departure_date} is unavailable in Laser's calendar."
@@ -112,15 +113,30 @@ async def discover_fares(args: argparse.Namespace, api_key: str) -> list[dict]:
     )
     try:
         page = await browser.new_page()
-        response = await page.goto(
-            ENTRY_URL, wait_until="domcontentloaded", timeout=TIMEOUT_MS
-        )
+        async with page.expect_response(
+            lambda item: item.url.endswith("/searchflight/api/v1/configs/"),
+            timeout=TIMEOUT_MS,
+        ) as config_response_info:
+            response = await page.goto(
+                ENTRY_URL, wait_until="domcontentloaded", timeout=TIMEOUT_MS
+            )
         if response and response.status in {401, 403, 429}:
             raise UpstreamError(
                 f"Laser blocked or rate-limited the request ({response.status})."
             )
         if response and response.status >= 400:
             raise UpstreamError(f"Laser booking failed to load ({response.status}).")
+
+        config_response = await config_response_info.value
+        if config_response.status in {401, 403, 429}:
+            raise UpstreamError(
+                "Laser blocked or rate-limited the booking configuration "
+                f"({config_response.status})."
+            )
+        if config_response.status >= 400:
+            raise UpstreamError(
+                f"Laser booking configuration failed ({config_response.status})."
+            )
 
         one_way = page.get_by_role(
             "radio", name=re.compile(r"one.?way|solo.?ida", re.IGNORECASE)
