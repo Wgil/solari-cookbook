@@ -10,6 +10,16 @@ Travelers often need to compare fares across fragmented, JavaScript-heavy bookin
 
 Flight aggregators need prices that come from the carrier's public booking flow, not unverified fare sites or opaque third-party agencies that may show stale, incomplete, or misleading prices. A managed Solari cloud browser lets an aggregator compare current fare families at the source while isolating browser workload from its application servers. It supports stealth and CAPTCHA handling and can record sessions when a booking flow changes. This example launches exactly one bounded session and does not enable a residential proxy.
 
+For the concrete Laser booking flow, Solari addresses several practical problems:
+
+- **The fares are produced by a browser application.** The public booking widget must bootstrap its JavaScript application, populate airport suggestions, operate a custom calendar, submit a search, and navigate to a separate results page. A simple HTTP request to the entry page does not produce the rendered fare cards.
+- **Browser sessions are expensive and fragile to host alongside an aggregator.** Running Chrome locally adds CPU and memory pressure, browser-version management, and cleanup risks to the application server. Solari runs that workload remotely and releases the session in a `finally` block after one route/date search.
+- **Booking bootstrap failures can be mistaken for “no flights.”** The upstream booking system can reject or expire a session before results load. Stealth mode and managed CAPTCHA support help the real UI complete normally, while explicit URL and HTTP-status checks keep blocked sessions separate from legitimate no-availability results.
+- **UI failures otherwise provide little evidence.** When `--recording` is enabled, the remote session can be replayed to see whether an airport option failed to appear, the calendar changed, or the results page never loaded. This is much more useful than a generic timeout in a server log.
+- **Interaction and extraction can fail independently.** Solari drives the live UI and returns the final rendered HTML. The separate static parser then extracts fares without browser calls, so a booking-flow failure can be distinguished from a results-page selector change.
+
+Solari does not guarantee inventory or bypass an airline's access rules. It provides a controlled browser environment, clearer failure boundaries, and optional debugging evidence for a low-frequency public fare search.
+
 ## Production insight
 
 The broader production application successfully used this approach for CCS → PMV, retrieving Economy Light, Economy Basic, Economy Plus, and Business Class fares directly from the public booking flow. The key value is not generic scraping; it is dependable price discovery for a real underserved travel market.
