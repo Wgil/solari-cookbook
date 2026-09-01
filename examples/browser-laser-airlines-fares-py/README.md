@@ -1,18 +1,18 @@
-# Laser Airlines fare discovery (Python)
+# Reliable airline fare discovery (Python)
 
-Discover the available fare families for one public Laser Airlines route and date with a managed Solari cloud browser.
+Discover available fare families for one public airline route and date with a managed Solari cloud browser. The implementation uses the Laser Airlines booking flow as a concrete example, but the browser-and-parser pattern applies to other carriers with JavaScript-heavy booking sites.
 
 ## The problem
 
-Travelers in Venezuela often need to compare domestic airline fares across fragmented, JavaScript-heavy airline booking sites. Conventional server-hosted scrapers can be unreliable, resource-heavy, and difficult to debug when airline UI flows change.
+Travelers often need to compare fares across fragmented, JavaScript-heavy booking sites. Conventional server-hosted scrapers can be unreliable, resource-heavy, and difficult to debug when booking flows change.
 
 ## Why Solari
 
-This example uses a managed Solari cloud browser to run the real Laser Airlines booking flow remotely. It isolates browser workload from the application server, supports stealth and CAPTCHA handling, and can record sessions for debugging when the airline flow changes. It launches exactly one bounded session and does not enable a residential proxy.
+Flight aggregators need prices that come from the carrier's public booking flow, not unverified fare sites or opaque third-party agencies that may show stale, incomplete, or misleading prices. A managed Solari cloud browser lets an aggregator compare current fare families at the source while isolating browser workload from its application servers. It supports stealth and CAPTCHA handling and can record sessions when a booking flow changes. This example launches exactly one bounded session and does not enable a residential proxy.
 
 ## Production insight
 
-The broader production application successfully used this approach to retrieve Laser Airlines fare families for CCS → PMV, including Economy Light, Economy Basic, Economy Plus, and Business Class. The key value is not generic scraping; it is reliable price discovery for a real underserved travel market.
+The broader production application successfully used this approach for CCS → PMV, retrieving Economy Light, Economy Basic, Economy Plus, and Business Class fares directly from the public booking flow. The key value is not generic scraping; it is dependable price discovery for a real underserved travel market.
 
 Browser interaction stays in [`main.py`](main.py). The rendered HTML is frozen with `page.content()` and passed to the separate static parser in [`parse.py`](parse.py), making results-page selector changes easier to isolate.
 
@@ -34,7 +34,7 @@ python main.py --origin CCS --destination PMV --departure-date 2026-09-21 --reco
 
 The CCS → PMV command above was validated against the public booking flow on August 31, 2026. Omit `--recording` unless you need a replay for debugging.
 
-The program exits with a concise error when the API key is missing, the date is past or unavailable, Laser reports no flights, Solari or the upstream site blocks the session, or the expected results-page selectors no longer match. It never prints the API key.
+The program exits with a concise error when the API key is missing, the date is past or unavailable, the carrier reports no flights, Solari or the upstream site blocks the session, or the expected results-page selectors no longer match. It never prints the API key.
 
 ## Sample output
 
