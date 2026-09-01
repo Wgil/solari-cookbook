@@ -10,7 +10,12 @@ import re
 import sys
 from datetime import date
 
-from parse import NoFlightsError, ResultsPageChangedError, parse_results_html
+from parse import (
+    NoFlightsError,
+    ResultsPageChangedError,
+    ResultsPageUnavailableError,
+    parse_results_html,
+)
 from solari_browser import Solari
 from solari_browser.errors import SolariError
 
@@ -111,8 +116,19 @@ async def discover_fares(args: argparse.Namespace, api_key: str) -> list[dict]:
         recording=args.recording,
         # No proxy is passed: the session uses Solari's default datacenter egress.
     )
+    stage = "opening the booking page"
+    bad_response_statuses: list[int] = []
     try:
         page = await browser.new_page()
+        page.on(
+            "response",
+            lambda response: (
+                bad_response_statuses.append(response.status)
+                if response.status >= 400 and len(bad_response_statuses) < 20
+                else None
+            ),
+        )
+        stage = "loading the KIU booking configuration"
         async with page.expect_response(
             lambda item: item.url.endswith("/searchflight/api/v1/configs/"),
             timeout=TIMEOUT_MS,
@@ -138,34 +154,71 @@ async def discover_fares(args: argparse.Namespace, api_key: str) -> list[dict]:
                 f"Laser booking configuration failed ({config_response.status})."
             )
 
+        stage = "selecting one-way travel"
         one_way = page.get_by_role(
             "radio", name=re.compile(r"one.?way|solo.?ida", re.IGNORECASE)
         ).first
         if await one_way.count():
             await one_way.check(force=True)
+        stage = "selecting the origin airport"
         await select_airport(page, "origin|origen", args.origin)
+        stage = "selecting the destination airport"
         await select_airport(page, "destination|destino", args.destination)
+        stage = "selecting the departure date"
         await select_departure_date(page, args.departure_date)
+        stage = "submitting the search"
         await page.get_by_role(
             "button", name=re.compile(r"search|buscar", re.IGNORECASE)
         ).first.click()
+        stage = "waiting for results navigation"
         await page.wait_for_url(RESULTS_URL_PATTERN, timeout=TIMEOUT_MS)
         if "session-error" in page.url:
             raise UpstreamError("Laser returned a blocked or expired booking session.")
+        stage = "waiting for rendered flight results"
         try:
             await page.wait_for_function(
                 """() => document.querySelector('.flightComponent') !== null ||
-                    /no\\s+(hay\\s+)?(vuelos?|flights?).*(disponibles?|available)/i
-                      .test(document.body.innerText)""",
-                timeout=15_000,
+                    [...document.querySelectorAll('body *')].some(element =>
+                      element.children.length === 0 &&
+                      /no\\s+(hay\\s+)?(vuelos?|flights?).*(disponibles?|available)/i
+                        .test(element.textContent || '')
+                    )""",
+                timeout=30_000,
             )
         except Exception:
-            # Freeze the page anyway so the static parser can distinguish a
-            # selector change from a legitimate no-flights result.
-            pass
+            if 429 in bad_response_statuses:
+                raise UpstreamError(
+                    "Laser/KIU rate-limited the search while loading results (429)."
+                )
+            if any(status in {401, 403} for status in bad_response_statuses):
+                raise UpstreamError(
+                    "Laser/KIU blocked the search while loading results."
+                )
+        stage = "parsing the rendered flight results"
         return parse_results_html(
             await page.content(), args.origin, args.destination, args.departure_date
         )
+    except (
+        InputError,
+        NoFlightsError,
+        ResultsPageChangedError,
+        ResultsPageUnavailableError,
+        SolariError,
+        UpstreamError,
+    ):
+        raise
+    except Exception as exc:
+        if 429 in bad_response_statuses:
+            raise UpstreamError(
+                f"Laser/KIU rate-limited the browser while {stage} (429)."
+            ) from exc
+        if any(status in {401, 403} for status in bad_response_statuses):
+            raise UpstreamError(
+                f"Laser/KIU blocked the browser while {stage}."
+            ) from exc
+        raise UpstreamError(
+            f"Laser's booking flow timed out or changed while {stage}."
+        ) from exc
     finally:
         await browser.close()
 
@@ -178,7 +231,13 @@ async def run() -> int:
         if not api_key:
             raise InputError("SOLARI_API_KEY is not set.")
         fares = await discover_fares(args, api_key)
-    except (InputError, NoFlightsError, ResultsPageChangedError, UpstreamError) as exc:
+    except (
+        InputError,
+        NoFlightsError,
+        ResultsPageChangedError,
+        ResultsPageUnavailableError,
+        UpstreamError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except SolariError as exc:

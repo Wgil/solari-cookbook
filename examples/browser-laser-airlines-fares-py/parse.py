@@ -19,6 +19,10 @@ class ResultsPageChangedError(RuntimeError):
     """The results page no longer matches the expected static HTML contract."""
 
 
+class ResultsPageUnavailableError(RuntimeError):
+    """The upstream results page did not render a recognizable final state."""
+
+
 def _price(text: str) -> Decimal | None:
     match = re.search(r"\d+(?:[.,]\d+)?", text)
     if not match:
@@ -33,27 +37,46 @@ def _fare_class(text: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "-", text.upper()).strip("-")
 
 
+def _has_text(soup: BeautifulSoup, pattern: str) -> bool:
+    expression = re.compile(pattern, re.IGNORECASE)
+    return any(expression.search(text) for text in soup.stripped_strings)
+
+
 def parse_results_html(
     html: str, origin: str, destination: str, departure_date: str
 ) -> list[dict]:
     """Return one normalized record per available fare family."""
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.select(".flightComponent")
-    page_text = soup.get_text(" ", strip=True)
 
     if not cards:
-        if re.search(
+        if _has_text(
+            soup,
             r"no\s+(?:hay\s+)?(?:vuelos?|flights?).*(?:disponibles?|available)",
-            page_text,
-            re.IGNORECASE,
         ):
             raise NoFlightsError(
                 f"No flights available for {origin} -> {destination} "
                 f"on {departure_date}."
             )
-        raise ResultsPageChangedError(
-            "Laser results-page selectors changed: no .flightComponent cards "
-            "were found."
+        if _has_text(
+            soup,
+            r"session[_-]error|page access error|too many requests",
+        ):
+            raise ResultsPageUnavailableError(
+                "Laser returned an upstream session or access-error page."
+            )
+        result_fragments = soup.select(
+            ".flightComponent__fare, .flightComponent__airports, "
+            "[data-bs-target^='#flight'], [data-target^='#flight']"
+        )
+        if result_fragments:
+            raise ResultsPageChangedError(
+                "Laser result fragments were found, but the .flightComponent "
+                "container selector no longer matched."
+            )
+        raise ResultsPageUnavailableError(
+            "Laser reached the results URL, but the page did not finish rendering "
+            "flight cards or a no-flights message."
         )
 
     requested_route = (origin.upper(), destination.upper())
